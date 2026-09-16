@@ -15,14 +15,14 @@
     button.ghost { background: #e6dccb; color: #4a3f34; }
     button.tiny { padding: 4px 9px; font-size: 12px; border-radius: 6px; }
     button:disabled { opacity: .45; cursor: not-allowed; }
-    input, select, textarea { width: 100%; border: 1px solid #d9cdbc; border-radius: 6px; padding: 9px; font: inherit; background: #fff; }
+    input, select, textarea { width: 100%; min-width: 0; border: 1px solid #d9cdbc; border-radius: 6px; padding: 9px; font: inherit; background: #fff; }
     label { display: block; margin: 9px 0 5px; color: #76695e; font-size: 13px; }
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
     .tabs { display: flex; gap: 6px; padding: 10px 16px 0; background: #f3efe7; }
     .tabs button { border-radius: 8px 8px 0 0; background: #e0d5c4; color: #5d5145; }
     .tabs button.active { background: #fffaf2; color: #8d3e37; }
-    .app { display: grid; grid-template-columns: 280px 1fr 320px; gap: 16px; padding: 16px; }
-    .panel { background: #fffaf2; border: 1px solid #d9cdbc; border-radius: 8px; padding: 14px; }
+    .app { display: grid; grid-template-columns: 280px minmax(0,1fr) 320px; gap: 16px; padding: 16px; }
+    .panel { background: #fffaf2; border: 1px solid #d9cdbc; border-radius: 8px; padding: 14px; min-width: 0; }
     .grid { display: grid; gap: 2px; margin: 0 auto; width: min(100%, 720px); border: 6px solid #72533c; background: #72533c; }
     .cell { aspect-ratio: 1; background: #f8ead2; cursor: pointer; border-radius: 2px; }
     .palette { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -36,7 +36,8 @@
     .mini { aspect-ratio: 1; border-radius: 2px; }
     .warning { color: #a03a2e; font-weight: 800; }
     /* ledger */
-    .ledger { padding: 16px; display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 16px; align-items: start; }
+    .ledger { padding: 16px; display: grid; grid-template-columns: minmax(0, 420px) minmax(0,1fr); gap: 16px; align-items: start; }
+    .ledger > div { min-width: 0; } /* 允许列收缩，宽表交给 .tablewrap 内部滚动，不撑破视口 */
     .ledger .full { grid-column: 1 / -1; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #e7dccb; vertical-align: top; }
@@ -59,14 +60,28 @@
     .fpbox { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #f6ecdb; border: 1px dashed #cbb994; border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
     .events { font-size: 13px; max-height: 320px; overflow: auto; }
     .events div { padding: 6px 0; border-bottom: 1px dashed #e7dccb; }
-    .detail { background: #f6ecdb; border-radius: 8px; padding: 10px; margin-top: 10px; font-size: 13px; }
-    .kv { display: grid; grid-template-columns: 96px 1fr; gap: 4px 8px; }
+    .detail { background: #f6ecdb; border-radius: 8px; padding: 10px; margin-top: 10px; font-size: 13px; min-width: 0; }
+    .kv { display: grid; grid-template-columns: 96px minmax(0,1fr); gap: 4px 8px; }
+    .kv > * { min-width: 0; overflow-wrap: anywhere; }
     .kv .k { color: #76695e; }
     .dead { opacity: .62; }
-    #toast { position: fixed; right: 18px; bottom: 18px; background: #2e2620; color: #fff; padding: 10px 16px; border-radius: 8px; font-weight: 700; opacity: 0; transform: translateY(10px); transition: .25s; pointer-events: none; }
+    #toast { position: fixed; right: 18px; bottom: 18px; max-width: calc(100vw - 36px); background: #2e2620; color: #fff; padding: 10px 16px; border-radius: 8px; font-weight: 700; opacity: 0; transform: translateY(10px); transition: .25s; pointer-events: none; }
     #toast.show { opacity: 1; transform: translateY(0); }
     [hidden] { display: none !important; } /* 防止 grid/flex 显示规则覆盖 hidden，保证页签互斥 */
-    @media (max-width: 1000px) { header { display: block; } .app, .ledger { grid-template-columns: 1fr; } }
+    html, body { max-width: 100%; overflow-x: hidden; }
+    .tablewrap { max-width: 100%; -webkit-overflow-scrolling: touch; }
+    th, td { word-break: break-word; }
+    @media (max-width: 1000px) { header { display: block; } .app, .ledger { grid-template-columns: minmax(0,1fr); } }
+    @media (max-width: 640px) {
+      header { padding: 14px; }
+      h1 { font-size: 21px; }
+      .tabs { padding: 8px 10px 0; }
+      .app, .ledger { padding: 10px; gap: 10px; }
+      .panel { padding: 12px; }
+      .formrow { grid-template-columns: 1fr; gap: 0; }     /* 窄屏表单单列，避免两列挤压溢出 */
+      .tierrow { grid-template-columns: 1fr 1fr auto; }
+      .stats { font-size: 13px; }
+    }
   </style>
 </head>
 <body>
@@ -362,10 +377,26 @@
     function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
 
     const CYCLE_MONTHS = { "1m": 1, "3m": 3, "6m": 6, "12m": 12 };
+    function daysInMonth(year, month1) { // month1 为 1-12
+      return new Date(Date.UTC(year, month1, 0)).getUTCDate();
+    }
+    function isMonthEnd(dateStr) {
+      const [y, m, d] = dateStr.split("-").map(Number);
+      return d === daysInMonth(y, m);
+    }
+    /** 目标月的“同日”，超出该月天数则钳到目标月最后一天（如 1/31 +1 月 = 2/28，不再溢出到次月） */
     function addMonths(dateStr, months) {
       const [y, m, d] = dateStr.split("-").map(Number);
-      const dt = new Date(Date.UTC(y, m - 1 + months, d));
+      const total = m - 1 + months;
+      const ty = y + Math.floor(total / 12);
+      const tm0 = ((total % 12) + 12) % 12;
+      const dim = new Date(Date.UTC(ty, tm0 + 1, 0)).getUTCDate();
+      const dt = new Date(Date.UTC(ty, tm0, Math.min(d, dim)));
       return dt.toISOString().slice(0, 10);
+    }
+    function monthEndOf(dateStr) { // 该日期所在月的自然月末
+      const [y, m] = dateStr.split("-").map(Number);
+      return y + "-" + String(m).padStart(2, "0") + "-" + String(daysInMonth(y, m)).padStart(2, "0");
     }
     function addDays(dateStr, days) {
       const [y, m, d] = dateStr.split("-").map(Number);
@@ -385,25 +416,32 @@
       const stepFee = tieredFee(base, tiers);
       const total = round2(Math.max(stepFee, min));
 
-      // 自起始日按结算周期切分。下一周期起点 ≥ 终止日时即作为末期收尾：
-      // 恰相等时把终止日并入本期，绝不另生单日尾期。
+      // 当“本期起始日”恰为自然月末（如 31 日、2 月末）时，本期边界落在
+      // 加 stepMonths 后目标月的自然月末（短月钳到最后一天），其后从次月 1 日续切；
+      // 自次月 1 日起按同日锚定正常切分，恰好得到自然的整月。
+      // 下一周期边界 ≥ 终止日即作为末期收尾，恰相等时并入本期，绝不另生单日尾期。
       const schedule = [];
       let periodStart = input.startDate, i = 0;
       while (periodStart <= input.endDate) {
-        const nextStart = addMonths(periodStart, stepMonths);
-        let periodEnd;
-        if (nextStart >= input.endDate) {
-          // 最后一期：无论终止日落在本周期内还是恰为下周期起点，都收尾于此并停止
-          periodEnd = input.endDate;
-          schedule.push({
-            index: i + 1, periodStart, periodEnd, dueDate: periodEnd, // 期末结算
-            amount: 0, settled: false, terminated: false
-          });
-          break;
+        let periodEnd, nextStart;
+        if (isMonthEnd(periodStart)) {
+          const inTarget = addMonths(periodStart, stepMonths); // 已钳在目标月最后一天
+          periodEnd = monthEndOf(inTarget);
+          if (periodEnd >= input.endDate) { // 末期：终止日不晚于目标月末则收尾
+            schedule.push({ index: i + 1, periodStart, periodEnd: input.endDate, dueDate: input.endDate, amount: 0, settled: false, terminated: false });
+            break;
+          }
+          nextStart = addDays(periodEnd, 1); // 自然月末次日 = 次月 1 日
+        } else {
+          nextStart = addMonths(periodStart, stepMonths);
+          if (nextStart >= input.endDate) {
+            schedule.push({ index: i + 1, periodStart, periodEnd: input.endDate, dueDate: input.endDate, amount: 0, settled: false, terminated: false });
+            break;
+          }
+          periodEnd = addDays(nextStart, -1); // 完整周期：[起始, 下一周期起点前一天]
         }
-        periodEnd = addDays(nextStart, -1); // 完整周期：区间 [起始, 下一周期起点前一天]
         schedule.push({
-          index: i + 1, periodStart, periodEnd, dueDate: periodEnd,
+          index: i + 1, periodStart, periodEnd, dueDate: periodEnd, // 期末结算
           amount: 0, settled: false, terminated: false
         });
         periodStart = nextStart;
@@ -624,7 +662,7 @@
     return {
       fingerprint, buildRegNo, buildLicNo, yearOf, overlaps,
       licenseStatus, isActiveForConflict, isUsable, scopeKey, sameScope, findConflict,
-      tieredFee, round2, addMonths, monthsBetween, computeFee, validateTiers,
+      tieredFee, round2, addMonths, addDays, monthEndOf, isMonthEnd, monthsBetween, computeFee, validateTiers,
       transaction, register, changeRegStatus, issueLicense, revokeLicense,
       validateProject, STATUS
     };

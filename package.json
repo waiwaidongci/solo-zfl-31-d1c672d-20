@@ -1,0 +1,15 @@
+{
+  "name": "brocade-pattern-ledger",
+  "version": "2.0.0",
+  "description": "手工织锦纹样排版台 · 版权登记与授权台账（单文件应用）",
+  "private": true,
+  "scripts": {
+    "test": "node test-ledger.js && node test-dom.js && node test-layout.js",
+    "test:rules": "node test-ledger.js",
+    "test:dom": "node test-dom.js",
+    "test:layout": "node test-layout.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}

@@ -263,6 +263,63 @@ const minFee = periodsOf("1m", ANN_S, ANN_E, 90000);
 eq(minFee.totalAmount, 90000, "保底取高 90000");
 eq(Math.round(minFee.schedule.reduce((a, s) => a + s.amount, 0) * 100), 9000000, "保底场景各期合计一致");
 
+/* ---------- 9b. 月末起始：按目标月自然月末收尾，覆盖长月/短月/闰年 ---------- */
+// addMonths 短月钳制，不再溢出到次月
+eq(Core.addMonths("2026-01-31", 1), "2026-02-28", "1/31 +1 月钳到 2/28（非闰年）");
+eq(Core.addMonths("2026-01-31", 2), "2026-03-31", "1/31 +2 月 = 3/31");
+eq(Core.addMonths("2024-01-31", 1), "2024-02-29", "闰年 1/31 +1 月 = 2/29");
+eq(Core.addMonths("2026-03-31", 1), "2026-04-30", "3/31 +1 月钳到 4/30");
+eq(Core.addMonths("2026-05-31", 1), "2026-06-30", "5/31 +1 月钳到 6/30");
+eq(Core.addMonths("2026-12-31", 1), "2027-01-31", "12/31 +1 月跨年 = 1/31");
+
+function monthEndCase(label, s, e) {
+  const f = periodsOf("1m", s, e);
+  eq(f.cycleCount, 12, label + "：月结周年 12 期");
+  eq(f.schedule[0].periodStart, s, label + "：首期起于起始日 " + s);
+  const firstExpectedEnd = Core.monthEndOf(Core.addMonths(s, 1));
+  eq(f.schedule[0].periodEnd, firstExpectedEnd, label + "：首期止于目标月末 " + firstExpectedEnd + "（不溢出到次月）");
+  eq(f.schedule[11].periodEnd, e, label + "：末期止于周年日 " + e);
+  ok(f.schedule.every(x => x.periodStart < x.periodEnd), label + "：无单日尾期");
+  // 除首期外，每期均为自然整月：起始=1 日、终止=该月最后一天
+  for (let k = 1; k < f.schedule.length; k++) {
+    const p = f.schedule[k];
+    eq(p.periodStart.slice(8, 10), "01", label + "：第" + (k + 1) + "期起于 1 日");
+    eq(p.periodEnd, Core.monthEndOf(p.periodStart), label + "：第" + (k + 1) + "期止于自然月末");
+  }
+  eq(Math.round(f.schedule.reduce((a, x) => a + x.amount, 0) * 100), f.totalAmount * 100, label + "：12 期金额合计一致");
+  eq(Core.addDays(f.schedule[0].periodEnd, 1), f.schedule[1].periodStart, label + "：首期次日衔接次期初");
+}
+monthEndCase("长月31日", "2026-01-31", "2027-01-31");
+monthEndCase("短月前31日", "2026-03-31", "2027-03-31");
+monthEndCase("五月31日", "2026-05-31", "2027-05-31");
+monthEndCase("八月31日", "2026-08-31", "2027-08-31");
+monthEndCase("十月31日", "2026-10-31", "2027-10-31");
+// 起始即 2 月最后一天（非闰年 28 日）：首期短月，其余整月
+{
+  const f = periodsOf("1m", "2026-02-28", "2027-02-28");
+  eq(f.cycleCount, 12, "2/28 起始周年 12 期");
+  eq(f.schedule[0].periodEnd, "2026-03-31", "首期 2/28~3/31 按目标月末");
+  eq(f.schedule[11].periodEnd, "2027-02-28", "末期止于 2/28");
+  eq(Math.round(f.schedule.reduce((a, x) => a + x.amount, 0) * 100), f.totalAmount * 100, "2/28 场景金额合计一致");
+}
+// 闰年 2/29 起始
+{
+  const f = periodsOf("1m", "2024-02-29", "2025-02-28");
+  eq(f.cycleCount, 12, "闰年 2/29 起一年 12 期（次年 2 月仅 28 天）");
+  eq(f.schedule[0].periodEnd, "2024-03-31", "首期止于 3/31");
+  eq(f.schedule[11].periodEnd, "2025-02-28", "末期止于次年 2/28");
+  ok(Math.abs(f.schedule.reduce((a, x) => a + x.amount, 0) - f.totalAmount) < 0.001, "闰年场景金额合计一致");
+}
+// 月末起始 + 季结/半年结/年结的期数仍与周年一致
+eq(periodsOf("3m", "2026-01-31", "2027-01-31").cycleCount, 4, "31日起季结 4 期");
+eq(periodsOf("6m", "2026-01-31", "2027-01-31").cycleCount, 2, "31日起半年结 2 期");
+eq(periodsOf("12m", "2026-01-31", "2027-01-31").cycleCount, 1, "31日起年结 1 期");
+{
+  const q = periodsOf("3m", "2026-01-31", "2027-01-31");
+  eq(q.schedule[0].periodEnd, "2026-04-30", "31日起季结首期止于 4/30");
+  eq(q.schedule[3].periodEnd, "2027-01-31", "31日起季结末期止于周年日");
+}
+
 /* ---------- 10. 导入：登记标识 / 登记号 / 指纹唯一，许可标识唯一 ---------- */
 L = newLedger();
 runTx(L, d => Core.register(d, regInput(cellsA)));

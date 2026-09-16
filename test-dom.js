@@ -1,7 +1,7 @@
 /* 真实 DOM 冒烟测试：启动页面，走完整 编辑→登记→签发→冲突→撤销→保存→导出→重开/导入 链路 */
 const fs = require("fs");
 const path = require("path");
-const { JSDOM } = require("/tmp/node_modules/jsdom");
+const { JSDOM } = require("jsdom");
 
 const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 
@@ -31,6 +31,8 @@ function setVal(sel, val, evt = "input") {
   const el = $(sel); el.value = val; el.dispatchEvent(new window.Event(evt, { bubbles: true }));
 }
 function click(sel) { $(sel).click(); }
+/* jsdom v24 未实现 PointerEvent，直接调用应用绑定的 onpointerdown 处理器 */
+function paintCell(el) { el.onpointerdown(new window.Event("pointerdown", { bubbles: true })); }
 
 /* ---- 0. 启动无报错 ---- */
 ok(!errors.length, "页面启动无未捕获错误：" + errors.join(";"));
@@ -56,7 +58,7 @@ $("#regOwner").value = "";
 click("#tabEditor");
 
 /* ---- 1. 编辑：点一个格子填色，撤销可回退，指纹随之变化 ---- */
-$("#grid").children[0].dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
+paintCell($("#grid").children[0]);
 $("#grid").children[0].style.background = $("#grid").children[0].style.background; // noop
 ok($("#editorFingerprint").textContent !== fpBlank, "填色后指纹改变");
 ok(JSON.parse(window.localStorage.getItem("zfl31Pattern")).version === 2, "绘制即自动保存 v2");
@@ -90,6 +92,14 @@ setVal("#licEnd", "2027-09-16", "input");
 setVal("#licCycle", "1m", "change");
 ok(/× 12 期/.test($("#feePerCycle").value), "周年月结预览为 12 期：" + $("#feePerCycle").value);
 ok(!/13 期/.test($("#feePerCycle").value), "不出现 13 期（无单日尾期）");
+// 月末起始：1/31 出发跨过 2 月，仍应 12 期、首期按目标月末收尾
+setVal("#licStart", "2026-01-31", "input");
+setVal("#licEnd", "2027-01-31", "input");
+ok(/× 12 期/.test($("#feePerCycle").value), "31 日起周年月结预览仍为 12 期：" + $("#feePerCycle").value);
+ok(/共 12 个结算周期/.test($("#feePreviewHint").textContent), "31 日起提示 12 个周期，无单日尾期");
+// 恢复为签发所用区间
+setVal("#licStart", "2026-09-16", "input");
+setVal("#licEnd", "2027-09-16", "input");
 $("#issueBtn").click();
 ok($("#licTable tbody").children.length === 1, "许可出现 1 行，实际 " + $("#licTable tbody").children.length);
 ok($("#feeTable tbody").children.length === 1, "费用同步出现 1 行");
@@ -226,7 +236,7 @@ function finish() {
   // 原有编辑能力在导入后仍工作
   const before = $("#editorFingerprint").textContent;
   click("#tabEditor");
-  $("#grid").children[5].dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
+  paintCell($("#grid").children[5]);
   ok($("#editorFingerprint").textContent !== before, "导入后仍可继续绘制");
   click("#undoBtn");
   ok($("#editorFingerprint").textContent === before, "导入后撤销仍可用");
