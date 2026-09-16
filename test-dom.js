@@ -39,6 +39,22 @@ ok($("#stats").children.length === 8, "用色统计 8 行");
 ok(/^[0-9A-Z]{10}$/.test($("#editorFingerprint").textContent), "启动即显示指纹");
 const fpBlank = $("#editorFingerprint").textContent;
 
+/* ---- 0b. 页签互斥：始终只显示当前页签，切换后各自状态保留 ---- */
+const isShown = el => !el.hidden && el.ownerDocument.defaultView.getComputedStyle(el).display !== "none";
+ok(isShown($("#editorView")), "初始仅编辑区显示");
+ok(!isShown($("#ledgerView")), "初始台账区隐藏（display 也必须为 none）");
+click("#tabLedger");
+ok(isShown($("#ledgerView")) && !isShown($("#editorView")), "切到台账：台账显示、编辑隐藏");
+ok($("#tabLedger").classList.contains("active") && !$("#tabEditor").classList.contains("active"), "台账页签高亮");
+// 在台账填一半，切走再切回，输入必须保留
+setVal("#regOwner", "留存测试合作社", "input");
+click("#tabEditor");
+ok(isShown($("#editorView")) && !isShown($("#ledgerView")), "切回编辑：编辑显示、台账隐藏");
+click("#tabLedger");
+ok($("#regOwner").value === "留存测试合作社", "切回台账后已填字段状态保留");
+$("#regOwner").value = "";
+click("#tabEditor");
+
 /* ---- 1. 编辑：点一个格子填色，撤销可回退，指纹随之变化 ---- */
 $("#grid").children[0].dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
 $("#grid").children[0].style.background = $("#grid").children[0].style.background; // noop
@@ -68,6 +84,12 @@ ok($("#regTable tbody").children.length === 1, "重复登记未新增行");
 setVal("#licLicensee", "乙服饰公司");
 setVal("#licOfficer", "授权专员张三");
 setVal("#licBase", "300000");
+// 边界：默认一年区间按月结应恰为 12 期，无单日尾期（界面预览）
+setVal("#licStart", "2026-09-16", "input");
+setVal("#licEnd", "2027-09-16", "input");
+setVal("#licCycle", "1m", "change");
+ok(/× 12 期/.test($("#feePerCycle").value), "周年月结预览为 12 期：" + $("#feePerCycle").value);
+ok(!/13 期/.test($("#feePerCycle").value), "不出现 13 期（无单日尾期）");
 $("#issueBtn").click();
 ok($("#licTable tbody").children.length === 1, "许可出现 1 行，实际 " + $("#licTable tbody").children.length);
 ok($("#feeTable tbody").children.length === 1, "费用同步出现 1 行");
@@ -152,20 +174,46 @@ function importText(txt) {
   $("#importFile").dispatchEvent(new window.Event("change", { bubbles: true }));
 }
 
-/* 损坏文件必须被拒且不覆盖现有数据 */
+/* 坏文件 1：快照被篡改（指纹不符） */
 const tampered = JSON.parse(savedRaw);
 tampered.ledger.registrations[0].snapshot.cells[0] = 7;
+/* 坏文件 2：两个不同登记号绑定同一指纹（唯一性缺陷回归） */
+const dupFpFile = JSON.parse(savedRaw);
+const r0 = dupFpFile.ledger.registrations[0];
+const clone = JSON.parse(JSON.stringify(r0));
+clone.id = "R9999"; clone.no = "ZB2026-DUPLICATE-9999"; // 登记号不同，但指纹/快照与 r0 相同
+dupFpFile.ledger.registrations.push(clone);
+/* 坏文件 3：JSON 无法解析 */
+const gibberish = "{这不是合法JSON";
+
 let alerted = "";
 window.alert = m => { alerted = m; };
 importText(JSON.stringify(tampered));
 
 setTimeout(() => {
-  ok(/导入失败|指纹不一致/.test(alerted), "损坏文件导入被拒：" + alerted);
-  ok($("#licTable tbody").children.length === 3, "失败导入未改动现有许可（仍 3 条）");
+  ok(/导入失败|指纹不一致/.test(alerted), "损坏快照文件导入被拒：" + alerted);
+  ok($("#regTable tbody").children.length === 1, "失败导入未改动登记（仍 1 条）");
+  ok($("#licTable tbody").children.length === 3, "失败导入未改动许可（仍 3 条）");
 
-  /* 合法文件完整还原（当前数据与文件一致，再验证不报错且编辑仍可用） */
-  importText(savedRaw);
-  setTimeout(finish, 60);
+  alerted = "";
+  importText(JSON.stringify(dupFpFile));
+  setTimeout(() => {
+    ok(/指纹重复/.test(alerted), "同指纹多登记号文件被拒：" + alerted);
+    ok($("#regTable tbody").children.length === 1, "同指纹文件未覆盖现有登记（仍 1 条）");
+    ok($("#licTable tbody").children.length === 3, "同指纹文件未覆盖现有许可（仍 3 条）");
+
+    alerted = "";
+    importText(gibberish);
+    setTimeout(() => {
+      ok(/导入失败/.test(alerted), "非法 JSON 被拒：" + alerted);
+      ok($("#regTable tbody").children.length === 1, "非法 JSON 未覆盖数据");
+
+      /* 合法文件完整还原（当前数据与文件一致，再验证不报错且编辑仍可用） */
+      alerted = "";
+      importText(savedRaw);
+      setTimeout(finish, 60);
+    }, 60);
+  }, 60);
 }, 60);
 
 function finish() {

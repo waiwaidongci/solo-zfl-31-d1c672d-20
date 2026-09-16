@@ -227,5 +227,76 @@ eq(roundtrip.ledger.fees.length, 1, "重开后费用完整");
 eq(roundtrip.ledger.registrations[0].no, savedReg.no, "重开后登记号一致");
 ok(roundtrip.ledger.fees[0].licenseNo === roundtrip.ledger.licenses[0].no, "重开后费用-许可关联完整");
 
+/* ---------- 9. 自然周期切分：不产生单日尾期 ---------- */
+function periodsOf(cycle, s, e, minimum = 0) {
+  return Core.computeFee({ base: 120000, minimum, tiers, cycle, startDate: s, endDate: e });
+}
+const ANN_S = "2026-09-16", ANN_E = "2027-09-16";
+const mFee = periodsOf("1m", ANN_S, ANN_E);
+eq(mFee.cycleCount, 12, "月结周年区间恰为 12 期（无单日尾期）");
+eq(mFee.schedule[11].periodStart, "2027-08-16", "末期起始为 2027-08-16");
+eq(mFee.schedule[11].periodEnd, "2027-09-16", "末期收尾于周年日 2027-09-16");
+ok(mFee.schedule.every(s => s.periodStart < s.periodEnd), "不存在单日尾期（每期起<止）");
+eq(Math.round(mFee.schedule.reduce((a, s) => a + s.amount, 0) * 100), mFee.totalAmount * 100, "12 期金额合计仍等于应收");
+
+const qFee = periodsOf("3m", ANN_S, ANN_E);
+eq(qFee.cycleCount, 4, "季结周年区间恰为 4 期（原会多出一个单日尾期）");
+ok(qFee.schedule.every(s => s.periodStart < s.periodEnd), "季结无单日尾期");
+eq(periodsOf("6m", ANN_S, ANN_E).cycleCount, 2, "半年结周年区间恰为 2 期");
+eq(periodsOf("12m", ANN_S, ANN_E).cycleCount, 1, "年结周年区间恰为 1 期");
+// 终止日落在周期起点的其它对齐场景
+const feeMonthAligned = periodsOf("1m", "2026-01-01", "2026-04-01");
+eq(feeMonthAligned.cycleCount, 3, "01-01 至 04-01 月结为 3 期（不是 4 期）");
+eq(feeMonthAligned.schedule[2].periodEnd, "2026-04-01", "末期止于 04-01");
+// 不跨期边界：整体落在一个周期内，只 1 期，不凭空切分
+const within = periodsOf("1m", "2026-09-16", "2026-09-20");
+eq(within.cycleCount, 1, "周期内短区间只 1 期");
+eq(within.schedule[0].periodStart, "2026-09-16", "短区间不跨期：起");
+eq(within.schedule[0].periodEnd, "2026-09-20", "短区间不跨期：止");
+const qWithin = periodsOf("3m", "2026-09-16", "2026-10-01");
+eq(qWithin.cycleCount, 1, "季结下未跨满一季只 1 期");
+// 起止同日（单日授权）合法地为 1 期，而不是 0 期或 2 期
+const oneDay = periodsOf("1m", "2026-09-16", "2026-09-16");
+eq(oneDay.cycleCount, 1, "单日授权为 1 期");
+// 保底高于阶梯费时，合计仍一致
+const minFee = periodsOf("1m", ANN_S, ANN_E, 90000);
+eq(minFee.totalAmount, 90000, "保底取高 90000");
+eq(Math.round(minFee.schedule.reduce((a, s) => a + s.amount, 0) * 100), 9000000, "保底场景各期合计一致");
+
+/* ---------- 10. 导入：登记标识 / 登记号 / 指纹唯一，许可标识唯一 ---------- */
+L = newLedger();
+runTx(L, d => Core.register(d, regInput(cellsA)));
+runTx(L, d => Core.register(d, Object.assign(regInput(cellsB), { owner: "丙工坊", series: "花鸟" })));
+const idA = L.registrations[0].id, idB = L.registrations[1].id;
+runTx(L, d => Core.issueLicense(d, licInput(idA, { licensee: "司一" })));
+runTx(L, d => Core.issueLicense(d, licInput(idB, { licensee: "司二", channel: "批发经销" })));
+function projectOf(ledger) {
+  return {
+    app: "brocade-pattern-ledger", version: 2,
+    pattern: { cols: 18, rows: 14, cells: cellsA, fingerprint: Core.fingerprint(18, 14, cellsA) },
+    ledger: { registrations: ledger.registrations, licenses: ledger.licenses, fees: ledger.fees, events: ledger.events, seq: ledger.seq }
+  };
+}
+ok(Core.validateProject(projectOf(L)) === true, "两条不同指纹登记合法通过");
+// 同一指纹 + 两个不同登记号 → 拒绝
+const dupFp = JSON.parse(JSON.stringify(projectOf(L)));
+dupFp.ledger.registrations[1].fingerprint = dupFp.ledger.registrations[0].fingerprint;
+dupFp.ledger.registrations[1].snapshot = JSON.parse(JSON.stringify(dupFp.ledger.registrations[0].snapshot));
+dupFp.ledger.registrations[1].no = "ZB2026-OTHER1-0009";
+dupFp.ledger.registrations[1].id = "R0009";
+throws(() => Core.validateProject(dupFp), /指纹重复/, "不同登记号绑定同一指纹被拒");
+// 登记标识 id 重复
+const dupId = JSON.parse(JSON.stringify(projectOf(L)));
+dupId.ledger.registrations[1].id = dupId.ledger.registrations[0].id;
+throws(() => Core.validateProject(dupId), /登记标识重复/, "登记标识重复被拒");
+// 登记号 no 重复（id 与指纹不同）
+const dupNo = JSON.parse(JSON.stringify(projectOf(L)));
+dupNo.ledger.registrations[1].no = dupNo.ledger.registrations[0].no;
+throws(() => Core.validateProject(dupNo), /登记号重复/, "登记号重复被拒");
+// 许可标识 id 重复（许可号不同）
+const dupLicId = JSON.parse(JSON.stringify(projectOf(L)));
+dupLicId.ledger.licenses[1].id = dupLicId.ledger.licenses[0].id;
+throws(() => Core.validateProject(dupLicId), /许可标识重复/, "许可标识重复被拒");
+
 console.log(`\n结果：${pass} 通过，${fail} 失败`);
 process.exit(fail ? 1 : 0);

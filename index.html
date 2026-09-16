@@ -65,6 +65,7 @@
     .dead { opacity: .62; }
     #toast { position: fixed; right: 18px; bottom: 18px; background: #2e2620; color: #fff; padding: 10px 16px; border-radius: 8px; font-weight: 700; opacity: 0; transform: translateY(10px); transition: .25s; pointer-events: none; }
     #toast.show { opacity: 1; transform: translateY(0); }
+    [hidden] { display: none !important; } /* 防止 grid/flex 显示规则覆盖 hidden，保证页签互斥 */
     @media (max-width: 1000px) { header { display: block; } .app, .ledger { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -384,20 +385,28 @@
       const stepFee = tieredFee(base, tiers);
       const total = round2(Math.max(stepFee, min));
 
-      // 自起始日按结算周期切分，超出终止日即停；期数由区间自然决定
+      // 自起始日按结算周期切分。下一周期起点 ≥ 终止日时即作为末期收尾：
+      // 恰相等时把终止日并入本期，绝不另生单日尾期。
       const schedule = [];
-      let cursor = input.startDate, i = 0;
-      while (cursor <= input.endDate) {
-        const periodStart = cursor;
+      let periodStart = input.startDate, i = 0;
+      while (periodStart <= input.endDate) {
         const nextStart = addMonths(periodStart, stepMonths);
-        // 区间为 [起始, 下一周期起始的前一天]，保证季末落在自然月末（如 12-31）
-        let periodEnd = addDays(nextStart, -1);
-        if (periodEnd > input.endDate) periodEnd = input.endDate;
+        let periodEnd;
+        if (nextStart >= input.endDate) {
+          // 最后一期：无论终止日落在本周期内还是恰为下周期起点，都收尾于此并停止
+          periodEnd = input.endDate;
+          schedule.push({
+            index: i + 1, periodStart, periodEnd, dueDate: periodEnd, // 期末结算
+            amount: 0, settled: false, terminated: false
+          });
+          break;
+        }
+        periodEnd = addDays(nextStart, -1); // 完整周期：区间 [起始, 下一周期起点前一天]
         schedule.push({
-          index: i + 1, periodStart, periodEnd, dueDate: periodEnd, // 期末结算
+          index: i + 1, periodStart, periodEnd, dueDate: periodEnd,
           amount: 0, settled: false, terminated: false
         });
-        cursor = nextStart;
+        periodStart = nextStart;
         i++;
       }
       if (!schedule.length) schedule.push({
@@ -583,14 +592,23 @@
       if (!Number.isInteger(cols) || !Number.isInteger(rows) || cells.length !== cols * rows) throw new Error("纹样尺寸与格数不一致。");
       if (!p.ledger || !Array.isArray(p.ledger.registrations) || !Array.isArray(p.ledger.licenses) || !Array.isArray(p.ledger.fees) || !Array.isArray(p.ledger.events)) throw new Error("台账数据不完整。");
       // 登记指纹必须与所存纹样快照一致（防篡改 / 串档）
+      // 同时要求登记标识 id、登记号 no、指纹 fingerprint 在文件内全部唯一
+      const seenRegId = new Set(), seenRegNo = new Set(), seenFp = new Set();
       for (const r of p.ledger.registrations) {
+        if (!r.id || !r.no || !r.fingerprint) throw new Error("登记记录缺少标识（id / 登记号 / 指纹）。");
+        if (seenRegId.has(r.id)) throw new Error("登记标识重复：" + r.id + "，不能导入。");
+        if (seenRegNo.has(r.no)) throw new Error("登记号重复：" + r.no + "，不能导入。");
+        if (seenFp.has(r.fingerprint)) throw new Error("纹样指纹重复：登记 " + r.no + " 与另一条登记绑定同一指纹 " + r.fingerprint + "，一个指纹只能登记一次。");
+        seenRegId.add(r.id); seenRegNo.add(r.no); seenFp.add(r.fingerprint);
         if (!r.snapshot || fingerprint(r.snapshot.cols, r.snapshot.rows, r.snapshot.cells) !== r.fingerprint) {
           throw new Error("登记号 " + r.no + " 的纹样快照与指纹不一致，文件可能已损坏。");
         }
       }
       const regIds = new Set(p.ledger.registrations.map(r => r.id));
-      const licNos = new Set();
+      const licNos = new Set(), licIds = new Set();
       for (const l of p.ledger.licenses) {
+        if (l.id && licIds.has(l.id)) throw new Error("许可标识重复：" + l.id);
+        if (l.id) licIds.add(l.id);
         if (licNos.has(l.no)) throw new Error("许可号重复：" + l.no);
         licNos.add(l.no);
         if (!regIds.has(l.registrationId)) throw new Error("许可 " + l.no + " 缺少对应登记。");
